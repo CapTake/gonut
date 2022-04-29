@@ -1,0 +1,22 @@
+{
+  "name": "gonut",
+  "version": "1.0.0",
+  "description": "telegram bot on node",
+  "main": "src/main.js",
+  "type": "module",
+  "scripts": {
+    "test": "debug",
+    "start": "node src/main.js"
+  },
+  "author": "@thetrung",
+  "license": "MIT",
+  "dependencies": {
+    "node-telegram-bot-api": "^0.57.0",
+    "pg": "^8.7.3",
+    "tezallet": "^0.0.82"
+  },
+  "engines": {
+    "node": "18.0.0",
+    "npm": "8.6.0"
+  }
+}
