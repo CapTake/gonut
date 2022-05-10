@@ -42,7 +42,6 @@ const bot = new TelegramBot(TOKEN, {polling: true});
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const file = join(__dirname, 'low.sql')
 import * as fs from 'fs'
-import { ok } from 'assert'
 import { setTimeout } from 'timers'
 import { error } from 'console'
 
@@ -325,21 +324,25 @@ const to_num = (num, range=100) => Math.round(num * range) / range
 const to_usd = (amount, fix=2) => "$" + amount.toFixed(fix).replace(/\d(?=(\d{3})+\.)/g, "$&,")
 const balance_usd = (balance, price) => price > 0.0 ? ` (${to_usd(price*balance)})`: ``
 
+const get_balance = (msg, public_key) => {
+    fetch_price('xtz').then(price => {
+        // 2. get_balance
+        tezallet.get_balance(public_key).then((balance)=>{
+            bot.sendMessage(msg.chat.id, 
+                `<code>${wallet_explorer(public_key)}</code>\n`
+                +`<i>Balance :</i> <code>${to_num(balance)} xtz`
+                + `${balance_usd(balance, price)}</code>`,
+                {parse_mode:'HTML'})
+        })
+    })
+}
+
 const show_balance = (username, msg) => {
     // 1. get [public_key] from db
     db_read('wallets', ()=>{
         let account = db.wallets.find(item => item.username == username)
         if(account){
-            fetch_price('xtz').then(price => {
-                // 2. get_balance
-                tezallet.get_balance(account.public_key).then((balance)=>{
-                    bot.sendMessage(msg.chat.id, 
-                        `<code>${wallet_explorer(account.public_key)}</code>\n`
-                        +`<i>Balance :</i> <code>${to_num(balance)} xtz`
-                        + `${balance_usd(balance, price)}</code>`,
-                        {parse_mode:'HTML'})
-                })
-            })
+            get_balance(msg, account.public_key)
         }
     })
 }
@@ -358,11 +361,24 @@ bot.onText(/\/balance/, (msg) => {
 // SHOW @account
 bot.onText(/\/show @(.+)/, (msg, match)=>{
 
+    // log
+    console.log(`[show] @${match[1]}`)
+
     // get username
     let username = match[1].toString().toUpperCase()
 
     // show now !
     show_balance(username, msg)
+})
+
+// SHOW address
+bot.onText(/\/show tz(.+)/, (msg, match)=> {
+
+    // log
+    console.log(`[show] tz${match[1]}`)
+
+    // get balance directly from address
+    get_balance(msg, `tz${match[1]}`)
 })
 
 // WALLET_LIST
