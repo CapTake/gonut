@@ -730,7 +730,7 @@ bot.onText(/\/lock/, msg_lock => {
                 bot.sendMessage(msg_lock.chat.id, 
                     account.is_locked ?
                     `Your account has been ${result ? '': 'always'} locked.`
-                    : `You haven't setup lock yet. /set_lock to start.`)
+                    : `You haven't setup lock yet. /pass to start.`)
             }
         })
     }
