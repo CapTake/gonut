@@ -199,10 +199,15 @@ const get_signer = async (msg, account) => {
         return signer
     } 
     catch(e){
+        // log
         console.log(e)
-        bot.sendMessage(msg.chat.id, 
+
+        // send none if locked
+        if(!account.is_locked) 
+            bot.sendMessage(msg.chat.id, 
             rep_mnemonic_mismatched())
             .then(msg => msg_stack.push(msg))
+
         // null
         return signer
     }
