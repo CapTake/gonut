@@ -138,22 +138,62 @@ const wallet_explorer = (account) => {
     return `<a href="https://tzkt.io/${account}/operations/">${account}</a>`;
 }
 
+const get_secret_from_season = (account, msg) => {
+
+    let secret = null
+
+    // find unlocked season
+    const existed_season = IMP.find(i => i.username === account.username)
+
+    // found season
+    if(existed_season){
+
+        // log
+        console.log(`[get_secret_from_season] season:`, existed_season)
+
+        // get password here:
+        const password = existed_season['password']
+        console.log(`[get_secret_from_season] ${msg.from.id}.${password}`)
+
+        // decrypt [mnemonic] with [password]
+        secret = decrypt_secret_with_password(account, msg.from.id, password)
+        console.log(`[get_secret_from_season] secret`, secret)
+    }
+    else { // still locked.
+        bot.sendMessage(msg.chat.id, `Please unlock wallet first.`)
+    }
+    return secret
+}
+
+// SIGNER
 const get_signer = async (msg, account) => {
+    
     // init 
     let signer = null
-    
+    let secret = null
+
     // ensure it pass
     try {
         console.log("[get_signer] begin :")
+        // console.log(`[salt] ${mid}.${account.username}`)
 
-        /// decrypt [mnemonic] 
-        console.log(`[salt] ${msg.from.id}.${account.username}`)
-        let secret = decrypt_secret(account, msg.from.id)
+        // account is encrypted
+        if(account.is_locked) {
+
+            // request from IMP
+            secret = get_secret_from_season(account, msg)
+        }
+        else {
+            /// decrypt [mnemonic] 
+            secret = decrypt_secret(account, msg.from.id)
+        }
+
+        // log
+        console.log(`[get_signer] parsed secret = `,secret)
 
         // create signer
         signer = tezallet.create_signer(secret, 0)
-        // console.log(secret)
-
+        
         // erase memory.
         secret = null
         return signer
@@ -338,11 +378,18 @@ const get_balance = (msg, public_key) => {
 }
 
 const show_balance = (username, msg) => {
+    
     // 1. get [public_key] from db
     db_read('wallets', ()=>{
+    
+        // find recorded account 
         let account = db.wallets.find(item => item.username == username)
-        if(account){
+
+        if(account){ // created ?
             get_balance(msg, account.public_key)
+        } 
+        else { // no wallet yet.
+            no_wallet_feedback(msg, username)
         }
     })
 }
@@ -522,6 +569,9 @@ bot.onText(/\/start/, (msg_start)=>{
                     "/create - new wallet\n" +
                     (account ? // if has account :
                     "/balance - show account\n" +
+                    "/pass - encrypt your mnemonic with: /pass [password]\n" +
+                    "/lock - lock your wallet by: /lock\n" +
+                    "/unlock - unlock your wallet by: /unlock [password]\n" +
                     "/export - your wallet mnemonic as 5-secs text\n" +
                     "/remove - remove current wallet to create new one\n" 
                     : ""), // else just hide it.
@@ -551,6 +601,192 @@ const encrypt_secret = (mnemonic, public_key, mid, username, init_vec) => {
             `${mid}.${username}`, 16),
         Buffer.from(init_vec, 'base64'))
 }
+
+const decrypt_secret_with_password = (account, mid, password) => {
+    return tezallet.decrypt_mnemonic(account.mnemonic, 
+        tezallet.encrypt_password(
+            `${TOKEN}.${password}`,
+            `${mid}.${account.username}`, 16),
+        Buffer.from(account.init_vec, 'base64'))
+}
+
+const encrypt_secret_with_password = (mnemonic, password, mid, username, init_vec) => {
+    return tezallet.encrypt_mnemonic(mnemonic, 
+        tezallet.encrypt_password(
+            `${TOKEN}.${password}`,
+            `${mid}.${username}`, 16),
+        Buffer.from(init_vec, 'base64'))
+}
+
+let IMP = []
+const remove_season_of = (account) => {
+
+    // find season of account
+    let existed_season = IMP.find(i => i.username === account.username)
+
+    // remove if existed
+    if(existed_season){
+        IMP = IMP.filter(i => i.username != account.username)
+        return true
+    }
+    return false
+}
+
+// +SET_LOCK <password>
+bot.onText(/\/pass (.+)/, (msg_lock, match)=>{
+    // private only
+    if(msg_lock.chat.type != 'private') return
+
+    // hide password right away.
+    clean_msg(msg_lock)
+    
+    db_read('wallets', ()=>{
+
+        const username = get_cap_username(msg_lock)
+        if(username){
+
+            // get account
+            const account = db.wallets.find(i => i.username === username)
+            if(account){
+
+                // get message info
+                const mid = msg_lock.from.id
+                const password = match[1].toString()
+
+                // not yet lock account ?
+                if(!account.is_locked){
+
+                    // log
+                    console.log(`[set_lock] locking account`, account)
+
+                    // return
+                    try {
+                        const mnemonic = decrypt_secret(account, mid)
+
+                        // 1-way encrypted password.
+                        const encrypted_password = tezallet.encrypt_password(
+                            password, `${mid}.${account.public_key}`, 16)
+
+                        // secret need to be encrypted with encrypted_password
+                        const encrypted = encrypt_secret_with_password(
+                            mnemonic, 
+                            encrypted_password, 
+                            mid, username,
+                            account.init_vec) 
+
+                        // QUERY
+                        pool.query(
+                            "UPDATE wallets SET mnemonic = $1, is_locked = $2 WHERE username = $3;",
+                            [ encrypted, true, username], (err,_)=>{
+    
+                                // error ?
+                                if(err) console.log(err)
+                                else console.log(`[set_lock] updated (encrypted)mnemonic for ${username}`)
+            
+                                // successfully !
+                                bot.sendMessage(msg_lock.chat.id, 
+                                `encrypted wallet for <code>${username}</code>${err ? err.message:''}`,
+                                {parse_mode:'HTML'})
+                                .then((msg_created) => clean_after(msg_created, DURATION_5SECS))
+                            }
+                        )
+                    } catch(e) {
+                        console.log(e)
+                        bot.sendMessage(msg_lock.chat.id, `Can't setup lock.`)
+                    }
+                }
+                else { // locked, re-lock ?
+                    bot.sendMessage(msg_lock.chat.id, `Your password has already been set.`)
+                }
+            }
+            else { // no account/wallet yet
+                no_wallet_feedback(msg_lock, username)
+            }
+        }
+    })
+
+})
+
+// *LOCK
+bot.onText(/\/lock/, msg_lock => {
+
+    // get username
+    const username = get_cap_username(msg_lock)
+    if(username){
+
+        // db check
+        db_read('wallets', () => {
+        
+            // seek account
+            const account = db.wallets.find(i => i.username === username)
+
+            if(account){
+                // remove season
+                console.log(`[lock] current IMP`, IMP)
+                const result = remove_season_of(account)
+                console.log(`[lock] new IMP`, IMP)
+
+                // feedback
+                bot.sendMessage(msg_lock.chat.id, 
+                    account.is_locked ?
+                    `Your account has been ${result ? '': 'always'} locked.`
+                    : `You haven't setup lock yet. /set_lock to start.`)
+            }
+        })
+    }
+})
+
+// *UNLOCK <password>
+bot.onText(/\/unlock (.+)/, (msg_unlock, match) => {
+
+    // private only
+    if(msg_unlock.chat.type != 'private') return
+
+    // hide password right away.
+    clean_msg(msg_unlock)
+
+    db_read('wallets', ()=>{
+
+        const username = get_cap_username(msg_unlock)
+        if(username){
+
+            // get account
+            const account = db.wallets.find(i => i.username === username)
+            if(account){
+
+                // get message info
+                const mid = msg_unlock.from.id
+                const password = match[1].toString()
+
+                // lock is set ?
+                if(account.is_locked){
+                    
+                    // encrypt password into IMP
+                    const encrypted_password = tezallet.encrypt_password(
+                        password, `${mid}.${account.public_key}`, 16)
+                    
+                    // to override later
+                    remove_season_of(account)
+
+                    // adding new season
+                    IMP.push({
+                        'username' : username,
+                        'password' : encrypted_password
+                    })
+
+                    // feedback
+                    bot.sendMessage(msg_unlock.chat.id, `Your wallet is unlocked.`)
+                }
+                else { // lock isn't set ?
+                    bot.sendMessage(msg_unlock.chat.id, `You haven't set password yet.`)
+                }
+            }
+            else { // no account/wallet yet
+                no_wallet_feedback(msg_unlock.chat.id, username)
+            }
+        }
+    })
+})
 
 // +CREATE
 bot.onText(/\/create/, (msg_create_wallet)=>{
@@ -704,6 +940,7 @@ bot.onText(/\/export/, (msg_export_mnemonic,_)=>{
 
     // get chat id
     let root_chat_id = msg_export_mnemonic.chat.id
+    let mid = msg_export_mnemonic.from.id
     clean_msg(msg_export_mnemonic)
 
     // inline question
@@ -735,20 +972,30 @@ bot.onText(/\/export/, (msg_export_mnemonic,_)=>{
                 const account = db.wallets.find(item => item.username === username)
                 if(account){
                     try {
-                        // decrypt mnemonic
-                        const secret = decrypt_secret(account, root_chat_id)
+                        let secret = null 
 
-                        // Show mnemonic
-                        bot.sendMessage(root_chat_id, rep_mnemonic(secret), {parse_mode:'HTML'})
-                            .then(msg_secret=>clean_after(msg_secret, DURATION_5SECS, true))
-                        
+                        // account is encrypted
+                        if(account.is_locked){
+                            console.log(`[export] request IMP for locked account`)
+
+                            // request password from IMP
+                            secret = get_secret_from_season(account, msg_export_mnemonic)
+                        } 
+                        else {
+                            // decrypt mnemonic
+                            secret = decrypt_secret(account, mid)
+                        }
+                        if(secret != null){
+                            // Show mnemonic
+                            bot.sendMessage(root_chat_id, rep_mnemonic(secret), {parse_mode:'HTML'})
+                                .then(msg_secret=>clean_after(msg_secret, DURATION_5SECS, true))
+                        }
                     } catch { // account mismatched
                         bot.sendMessage(root_chat_id, rep_mnemonic_mismatched())
                             .then(msg_mismatch => msg_stack.push(msg_mismatch))
                     }
                 } else { // no wallet yet.
-                    bot.sendMessage(root_chat_id, rep_mnemonic_no_wallet())
-                    .then(msg_no_wallet=> msg_stack.push(msg_no_wallet))      
+                    no_wallet_feedback(msg_export_mnemonic, 'You')
                 }
             })
         }) 
@@ -756,7 +1003,6 @@ bot.onText(/\/export/, (msg_export_mnemonic,_)=>{
 })
 
 const rep_mnemonic = (secret) => `<b>Mnemonic</b> \n\n<code>${secret}</code>\n`
-const rep_mnemonic_no_wallet = () => `You haven't created wallet yet.`
 const rep_mnemonic_mismatched = () => `your account info were mismatched to last access.`
 
 //

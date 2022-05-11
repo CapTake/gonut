@@ -23,7 +23,8 @@ If you are curious or just want to verify if I may steal your XTZ :D
         create - create new wallet
         balance - show your balance
         export - show your mnemonic words
-        lock/unlock - encrypt wallet w/ your password (planned)
+        pass - encrypt your mnemonic with password
+        lock/unlock - lock/unlock your wallet
         
 2. Wallet & utils 
         
