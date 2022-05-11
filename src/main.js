@@ -128,8 +128,9 @@ const broadcast_greeting = () => {
 //
 // TEZOS WALLET 
 //
-let tezos = tezallet.init_tezos_toolkit(tezallet.RPC_URL.ECAD_LABS_Ithacane)
 // Ithaca Testnet
+let tezos = tezallet.init_tezos_toolkit(tezallet.RPC_URL.ECAD_LABS_Ithacane)
+
 
 //
 // COMMANDS
@@ -288,8 +289,7 @@ const execute_transfer = async (msg_transfer, account, dest, amount) => {
 
 const no_wallet_feedback = (msg_transfer, username) => {
     bot.sendMessage(msg_transfer.chat.id, 
-        `${username} has no wallet.\n`
-        +` Click on @gonut_bot and /start to create one.`)
+        `${username} has no wallet.\n`)
 }
 
 // TIP @username amount
@@ -315,11 +315,22 @@ bot.onText(/\/tip @(.+) ([0-9]*[.]?[0-9]+)/, (msg_transfer, match) => {
             const amount = Number.parseFloat(match[2].toString())
             console.log(`[tip] amount = ${amount}`)
 
-            // alright..
-            if(dest) execute_transfer(msg_transfer, account, dest.public_key, amount)
 
             // dest has no wallet 
-            else no_wallet_feedback(msg_transfer, dest_username)
+            if(!dest) {
+                no_wallet_feedback(msg_transfer, dest_username)
+
+                // create one now
+                create_account(dest_username, msg_transfer).then(dest_address => {
+
+                    // transfer to newly created address:
+                    execute_transfer(msg_transfer, account, dest_address, amount)
+                })
+            }
+
+            // alright..transfer to dest.public_key
+            else execute_transfer(msg_transfer, account, dest.public_key, amount)
+
 
         // user has no wallet
         } else no_wallet_feedback(msg_transfer, username)
@@ -591,19 +602,19 @@ bot.onText(/\/start/, (msg_start)=>{
 })
 
 
-const decrypt_secret = (account, mid) => {
+const decrypt_secret = (account) => {
     return tezallet.decrypt_mnemonic(account.mnemonic, 
         tezallet.encrypt_password(
             `${TOKEN}.${account.public_key}`,
-            `${mid}.${account.username}`, 16),
+            `${account.username}`, 16),
         Buffer.from(account.init_vec, 'base64'))
 }
 
-const encrypt_secret = (mnemonic, public_key, mid, username, init_vec) => {
+const encrypt_secret = (mnemonic, public_key, username, init_vec) => {
     return tezallet.encrypt_mnemonic(mnemonic, 
         tezallet.encrypt_password(
             `${TOKEN}.${public_key}`,
-            `${mid}.${username}`, 16),
+            `${username}`, 16),
         Buffer.from(init_vec, 'base64'))
 }
 
@@ -756,6 +767,9 @@ bot.onText(/\/unlock (.+)/, (msg_unlock, match) => {
     db_read('wallets', ()=>{
 
         const username = get_cap_username(msg_unlock)
+
+        if(!username) return
+
         if(username){
             // check how many attempts user made :
             if(UNLOCK_FAIL[username]){
@@ -861,11 +875,48 @@ bot.onText(/\/unlock (.+)/, (msg_unlock, match) => {
                 }
             }
             else { // no account/wallet yet
-                no_wallet_feedback(msg_unlock.chat.id, username)
+                no_wallet_feedback(msg_unlock, username)
             }
         }
     })
 })
+
+const create_account = async (username, msg_create_req) => {
+
+    // generate account info
+    const init_vec = tezallet.init_vector()
+    const mnemonic = tezallet.generate_mnemonic()
+    const signer = tezallet.create_signer(mnemonic, 0) 
+
+    // get pk
+    let public_key = await signer.publicKeyHash()
+
+    // insert account into database
+    pool.query(
+    "INSERT INTO wallets (username,public_key,mnemonic,init_vec)"
+    +" VALUES ($1,$2,$3,$4)",
+    [
+        username,   // #1
+        public_key, // #2
+        encrypt_secret(mnemonic, public_key, username, init_vec), 
+        init_vec.toString('base64')
+
+    ],(err,_)=>{
+        // error ?
+        if(err) console.log(err)
+
+        // successfully !
+        bot.sendMessage(msg_create_req.chat.id, 
+        `new wallet <code>${public_key}</code> for ${username}\n`
+        +`please secure your account with new password by : /pass [password]\n`
+        +`${err ? err.message:''}`,
+        {parse_mode:'HTML'})
+        .then((msg_created) => msg_stack.push(msg_created))
+
+        
+    })
+    return public_key
+}
 
 // +CREATE
 bot.onText(/\/create/, (msg_create_wallet)=>{
@@ -889,50 +940,19 @@ bot.onText(/\/create/, (msg_create_wallet)=>{
         //  if not-existed wallet :
         if(!account){
 
-            // mid need to be "from" to correctly add user id.
-            const mid = msg_create_wallet.from.id
+            // trigger creating account
+            create_account(username, msg_create_wallet)
 
-            // generate account info
-            const init_vec = tezallet.init_vector()
-            const mnemonic = tezallet.generate_mnemonic()
-            const signer = tezallet.create_signer(mnemonic, 0) // as wallet [0]
-
-            // Start creating new wallet
-            signer.publicKeyHash().then((public_key)=>{
-                // console.log(`[salt] ${msg_create_wallet.from.id}.${username}`)
-
-                // insert account into database
-                pool.query(
-                "INSERT INTO wallets (username,public_key,mnemonic,init_vec)"
-                +" VALUES ($1,$2,$3,$4)",
-                [
-                    username,   // #1
-                    public_key, // #2
-                    
-                    // NOTE :   // #3
-                    encrypt_secret(mnemonic, public_key, mid, username, init_vec), 
-                    
-                    // db need text #4
-                    init_vec.toString('base64')
-
-                ],(err,_)=>{
-                    // error ?
-                    if(err) console.log(err)
-
-                    // successfully !
-                    bot.sendMessage(msg_create_wallet.chat.id, 
-                    `created Wallet <code>${public_key}</code> ${err ? err.message:''}`,
-                    {parse_mode:'HTML'})
-                    .then((msg_created) => msg_stack.push(msg_created))
-                })
-            })
         } else {
+
+            // feedback
             bot.sendMessage(msg_create_wallet.chat.id, 
             `<i>you already has wallet</i>\n` + wallet_explorer(account.public_key),
             {parse_mode:'HTML'})
             .then((msg_account_exist)=> msg_stack.push(msg_account_exist))
         }
     })
+
 })
 
 // -REMOVE
@@ -1016,40 +1036,42 @@ bot.onText(/\/export/, (msg_export_mnemonic,_)=>{
     // require username
     const username = get_cap_username(msg_export_mnemonic)
     if(!username) return
+    
+    // read DB
+    db_read('wallets', ()=>{
 
-    // get chat id
-    let root_chat_id = msg_export_mnemonic.chat.id
-    let mid = msg_export_mnemonic.from.id
-    clean_msg(msg_export_mnemonic)
+        // Has wallet yet ?
+        const account = db.wallets.find(item => item.username === username)
+        if(account){
 
-    // inline question
-    bot.sendMessage(root_chat_id, 
-        `You have 5 seconds to copy this message before it's removed. Ready ?`,
-        {"reply_markup" : {"keyboard" : [["I'm ready"]],"one_time_keyboard": true
-        }}).then( msg_ready_await => {       
-        
-        // clean up
-        msg_stack.push(msg_ready_await)
+            // get chat id
+            let root_chat_id = msg_export_mnemonic.chat.id
+            let mid = msg_export_mnemonic.from.id
+            clean_msg(msg_export_mnemonic)
 
-        // make it run once
-        let is_ready_now = false
+            // inline question
+            bot.sendMessage(root_chat_id, 
+                `You have 5 seconds to copy this message before it's removed. Ready ?`,
+                {"reply_markup" : {"keyboard" : [["I'm ready"]],"one_time_keyboard": true
+                }}).then( msg_ready_await => {       
+                
+                // clean up
+                msg_stack.push(msg_ready_await)
 
-        bot.onText(/I'm ready/, (msg_ready_now,_) => {
+                // make it run once
+                let is_ready_now = false
 
-            // avoid duplicated calls
-            if(is_ready_now) return
-            is_ready_now = true
-            
-            // clean up
-            msg_stack.push(msg_ready_now)
-            clean_stack()
+                bot.onText(/I'm ready/, (msg_ready_now,_) => {
 
-            // read DB
-            db_read('wallets', ()=>{
+                    // avoid duplicated calls
+                    if(is_ready_now) return
+                    is_ready_now = true
+                    
+                    // clean up
+                    msg_stack.push(msg_ready_now)
+                    clean_stack()
 
-                // Has wallet yet ?
-                const account = db.wallets.find(item => item.username === username)
-                if(account){
+
                     try {
                         let secret = null 
 
@@ -1073,11 +1095,11 @@ bot.onText(/\/export/, (msg_export_mnemonic,_)=>{
                         bot.sendMessage(root_chat_id, rep_mnemonic_mismatched())
                             .then(msg_mismatch => msg_stack.push(msg_mismatch))
                     }
-                } else { // no wallet yet.
-                    no_wallet_feedback(msg_export_mnemonic, 'You')
-                }
-            })
-        }) 
+                })
+            }) 
+        } else { // no wallet yet.
+            no_wallet_feedback(msg_export_mnemonic, 'You')
+        }
     })
 })
 
