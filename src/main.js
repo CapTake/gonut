@@ -741,6 +741,9 @@ bot.onText(/\/lock/, msg_lock => {
     }
 })
 
+let UNLOCK_FAIL = {}
+const UNLOCK_MAX = 3
+
 // *UNLOCK <password>
 bot.onText(/\/unlock (.+)/, (msg_unlock, match) => {
 
@@ -754,6 +757,28 @@ bot.onText(/\/unlock (.+)/, (msg_unlock, match) => {
 
         const username = get_cap_username(msg_unlock)
         if(username){
+            // check how many attempts user made :
+            if(UNLOCK_FAIL[username]){
+                const attempts = UNLOCK_FAIL[username].attempts
+
+                if(attempts === UNLOCK_MAX){
+                    const now = (new Date()).getTime()
+                    const duration = DURATION_5_MINUTE - (now - UNLOCK_FAIL[username].time)
+
+                    if(duration > 0){
+                        const time_left = to_num(duration / (60*1000), 2)
+                        // feedback
+                        bot.sendMessage(msg_unlock.chat.id, 
+                            `You have failed ${UNLOCK_MAX} times, please wait ${time_left} mins.`)
+                        // break
+                        return
+                    } else {
+                        UNLOCK_FAIL[username].attempts = 0
+                        UNLOCK_FAIL[username].time = now
+                        console.log(`[unlock] unbanned ${username} at ${now}`)
+                    }
+                }
+            }
 
             // get account
             const account = db.wallets.find(i => i.username === username)
@@ -766,21 +791,70 @@ bot.onText(/\/unlock (.+)/, (msg_unlock, match) => {
                 // lock is set ?
                 if(account.is_locked){
                     
-                    // encrypt password into IMP
-                    const encrypted_password = tezallet.encrypt_password(
-                        password, `${mid}.${account.public_key}`, 16)
-                    
-                    // to override later
-                    remove_season_of(account)
+                    const existed_season = IMP.find(i => i.username === username)
 
-                    // adding new season
-                    IMP.push({
-                        'username' : username,
-                        'password' : encrypted_password
-                    })
+                    // unlocked
+                    if(existed_season){
 
-                    // feedback
-                    bot.sendMessage(msg_unlock.chat.id, `Your wallet is unlocked.`)
+                        // feedback
+                        bot.sendMessage(msg_unlock.chat.id, `Your wallet is already unlocked.`)
+                    }
+                    else { // unlock new season
+
+                        const encrypted_password = tezallet.encrypt_password(
+                            password, `${mid}.${account.public_key}`, 16)
+                        
+                        try {
+                            // to override later
+                            remove_season_of(account)
+
+                            // adding new season
+                            IMP.push({
+                                'username' : username,
+                                'password' : encrypted_password
+                            })
+                            
+                            get_signer(msg_unlock, account).then(signer =>{
+                                if(signer){
+                                    // feedback
+                                    bot.sendMessage(msg_unlock.chat.id, `Your wallet is unlocked.`)  
+                                }
+                                else{
+                                    // to cleanup
+                                    remove_season_of(account) 
+                            
+                                    // feedback
+                                    bot.sendMessage(msg_unlock.chat.id, `Wrong password. Try again.`)
+                                    
+                                    // counting..
+                                    if(UNLOCK_FAIL[account.username])
+                                    {
+                                        UNLOCK_FAIL[account.username].attempts += 1
+                                        if(UNLOCK_FAIL[account.username].attempts === UNLOCK_MAX)
+                                        {
+                                            console.log(`[unlock] max attempts reached for ${username}`)
+                                            
+                                            // save timestamp
+                                            UNLOCK_FAIL[account.username].time = (new Date()).getTime()
+                                        }
+                                    }
+                                    else {
+                                        // init data for user
+                                        UNLOCK_FAIL[account.username] = {} 
+                                        UNLOCK_FAIL[account.username].attempts = 1
+                                    }
+
+                                    // log
+                                    console.log(UNLOCK_FAIL)
+                                }
+                                // empty
+                                signer = null
+                            })
+                        } catch(e){
+                            // log
+                            console.log(e)
+                        }
+                    }
                 }
                 else { // lock isn't set ?
                     bot.sendMessage(msg_unlock.chat.id, `You haven't set password yet.`)
