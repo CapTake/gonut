@@ -18,5 +18,9 @@ CREATE TABLE IF NOT EXISTS wallets (
     public_key VARCHAR(128) NOT NULL,
     mnemonic VARCHAR(255) NOT NULL,
     init_vec VARCHAR (255) NOT NULL
-)
+);
+
+-- Adding one more column
+ALTER TABLE wallets
+ADD COLUMN IF NOT EXISTS is_locked BOOLEAN;
 
