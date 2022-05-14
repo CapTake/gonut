@@ -150,15 +150,15 @@ const get_secret_from_season = (account, msg) => {
     if(existed_season){
 
         // log
-        console.log(`[get_secret_from_season] season:`, existed_season)
+        // console.log(`[get_secret_from_season] season:`, existed_season)
 
         // get password here:
         const password = existed_season['password']
-        console.log(`[get_secret_from_season] ${msg.from.id}.${password}`)
+        // console.log(`[get_secret_from_season] ${msg.from.id}.${password}`)
 
         // decrypt [mnemonic] with [password]
         secret = decrypt_secret_with_password(account, msg.from.id, password)
-        console.log(`[get_secret_from_season] secret`, secret)
+        // console.log(`[get_secret_from_season] secret`, secret)
     }
     else { // still locked.
         bot.sendMessage(msg.chat.id, `Please unlock wallet first.`)
@@ -312,7 +312,7 @@ bot.onText(/\/tip @(.+) ([0-9]*[.]?[0-9]+)/, (msg_transfer, match) => {
 
         // alright..
         if (account){ 
-            
+
             // get dest address by username
             const dest_username = match[1].toUpperCase()
             let dest = db.wallets.find(item => item.username === dest_username)
@@ -640,6 +640,40 @@ const encrypt_secret_with_password = (mnemonic, password, mid, username, init_ve
         Buffer.from(init_vec, 'base64'))
 }
 
+const update_encrypt_mnemonic = (mnemonic, password, mid, account, username, msg_lock) => {
+
+    // 1-way encrypted password.
+    const encrypted_password = tezallet.encrypt_password(
+        password, `${mid}.${account.public_key}`, 16)
+
+    // secret need to be encrypted with encrypted_password
+    const encrypted = encrypt_secret_with_password(
+        mnemonic, 
+        encrypted_password, 
+        mid, username,
+        account.init_vec) 
+
+    // QUERY
+    pool.query(
+        "UPDATE wallets SET mnemonic = $1, is_locked = $2 WHERE username = $3;",
+        [ encrypted, true, username], (err,_)=>{
+
+            // error ?
+            if(err) console.log(err)
+            else console.log(`[set_lock] updated (encrypted)mnemonic for ${username}`)
+
+            // erase IMP if exist
+            IMP = IMP.filter(i => i.username != username)
+
+            // successfully !
+            bot.sendMessage(msg_lock.chat.id, 
+            `encrypted wallet for <code>${username}</code>${err ? err.message:''}`,
+            {parse_mode:'HTML'})
+            .then((msg_created) => clean_after(msg_created, DURATION_5SECS))
+        }
+    )
+}
+
 let IMP = []
 const remove_season_of = (account) => {
 
@@ -683,42 +717,40 @@ bot.onText(/\/pass (.+)/, (msg_lock, match)=>{
 
                     // return
                     try {
+                        // decrypt current mnemonic
                         const mnemonic = decrypt_secret(account, mid)
+                        
+                        // encrypt again with new password
+                        update_encrypt_mnemonic(mnemonic, password, mid, account, username, msg_lock)
 
-                        // 1-way encrypted password.
-                        const encrypted_password = tezallet.encrypt_password(
-                            password, `${mid}.${account.public_key}`, 16)
-
-                        // secret need to be encrypted with encrypted_password
-                        const encrypted = encrypt_secret_with_password(
-                            mnemonic, 
-                            encrypted_password, 
-                            mid, username,
-                            account.init_vec) 
-
-                        // QUERY
-                        pool.query(
-                            "UPDATE wallets SET mnemonic = $1, is_locked = $2 WHERE username = $3;",
-                            [ encrypted, true, username], (err,_)=>{
-    
-                                // error ?
-                                if(err) console.log(err)
-                                else console.log(`[set_lock] updated (encrypted)mnemonic for ${username}`)
-            
-                                // successfully !
-                                bot.sendMessage(msg_lock.chat.id, 
-                                `encrypted wallet for <code>${username}</code>${err ? err.message:''}`,
-                                {parse_mode:'HTML'})
-                                .then((msg_created) => clean_after(msg_created, DURATION_5SECS))
-                            }
-                        )
                     } catch(e) {
                         console.log(e)
-                        bot.sendMessage(msg_lock.chat.id, `Can't setup lock.`)
+                        bot.sendMessage(msg_lock.chat.id, rep_cant_setup_lock)
                     }
                 }
-                else { // locked, re-lock ?
-                    bot.sendMessage(msg_lock.chat.id, `Your password has already been set.`)
+                // locked => re-lock ?
+                else {
+                    // log 
+                    console.log(`[set_lock] re-locking account`, account)
+
+                    // unlocked yet ? 
+                    const secret = get_secret_from_season(account, msg_lock)
+
+                    if(secret){
+                        try {
+                            // encrypt again with new password
+                            update_encrypt_mnemonic(secret, password, mid, account, username, msg_lock)
+                        } 
+                        catch(e){
+                            console.log(e)
+                            bot.sendMessage(msg_lock.chat.id, rep_cant_setup_lock)
+                        }
+                    } 
+                    // not yet unlocked
+                    else {
+                        // feedback
+                        bot.sendMessage(msg_lock.chat.id, `You need to unlock first.`)
+                    }
                 }
             }
             else { // no account/wallet yet
@@ -1034,6 +1066,7 @@ bot.onText(/\/remove/, (msg_reset)=>{
         })
 })
 
+
 // *EXPORT
 bot.onText(/\/export/, (msg_export_mnemonic,_)=>{
     // private only
@@ -1112,6 +1145,7 @@ bot.onText(/\/export/, (msg_export_mnemonic,_)=>{
 const rep_mnemonic = (secret) => `<b>Mnemonic</b> \n\n<code>${secret}</code>\n`
 const rep_mnemonic_mismatched = () => `your account info were mismatched to last access.`
 
+const rep_cant_setup_lock = () => `Can't setup lock.`
 //
 // PERMISSIONED TASKS
 //
