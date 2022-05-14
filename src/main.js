@@ -129,7 +129,7 @@ const broadcast_greeting = () => {
 // TEZOS WALLET 
 //
 // Ithaca Testnet
-let tezos = tezallet.init_tezos_toolkit(tezallet.RPC_URL.ECAD_LABS_Ithacane)
+let toolkit = tezallet.init_tezos_toolkit(tezallet.RPC_URL.ECAD_LABS_Ithacane)
 
 
 //
@@ -170,6 +170,7 @@ const get_secret_from_season = (account, msg) => {
 const get_signer = async (msg, account) => {
     
     // init 
+    tezallet.reset()
     let signer = null
     let secret = null
 
@@ -190,7 +191,7 @@ const get_signer = async (msg, account) => {
         }
 
         // log
-        console.log(`[get_signer] parsed secret = `,secret)
+        // console.log(`[get_signer] parsed secret = `,secret)
 
         // create signer
         signer = tezallet.create_signer(secret, 0)
@@ -256,6 +257,9 @@ const execute_transfer = async (msg_transfer, account, dest, amount) => {
                     +`to <code>${dest}</code> after`
                     +`<code> ${counter} secs</code>`, 
                     {parse_mode:"HTML"})
+
+                // clear up
+                tezallet.reset()
             }, 
             // Failure
             (reason)=>{
@@ -277,6 +281,9 @@ const execute_transfer = async (msg_transfer, account, dest, amount) => {
                     +`<code>${amount} tez </code> after ${counter} secs:\n`
                     +`${reason.status} - ${reason.statusText}</i>`, 
                     {parse_mode:"HTML"})
+
+                // clear up
+                tezallet.reset()
             }
         )
     } else {
@@ -309,12 +316,11 @@ bot.onText(/\/tip @(.+) ([0-9]*[.]?[0-9]+)/, (msg_transfer, match) => {
             // get dest address by username
             const dest_username = match[1].toUpperCase()
             let dest = db.wallets.find(item => item.username === dest_username)
-            console.log("[tip] dest:",dest)
+            console.log(`[tip] src = ${account.username} >> dest = ${dest.username}`)
 
             // get amount to transfer
             const amount = Number.parseFloat(match[2].toString())
             console.log(`[tip] amount = ${amount}`)
-
 
             // dest has no wallet 
             if(!dest) {
@@ -1115,7 +1121,7 @@ let is_admin = (msg) => {
 
 // RPC LIST
 bot.onText(/\/rpc_list/, (msg) => {
-    let val = tezos.rpc.getRpcUrl()
+    let val = toolkit.rpc.getRpcUrl()
     let acc = `<strong>RPC\n${val}</strong>\n\n<b>LIST</b>\n<code>`
     Object.keys(tezallet.RPC_URL).map(rpc => acc += rpc.toString() + "\n")
     acc += "\n</code>"
@@ -1125,20 +1131,30 @@ bot.onText(/\/rpc_list/, (msg) => {
 
 // CHANGE RPC
 bot.onText(/\/rpc (.+)/, (msg, match) => {
+    
+    // fetch DB
     db_read('admins', () => {
-    // admin only
+    
+    // permissioned
     if(!is_admin) return
-    // proceed:
+    
+    // init
     const custom = match[1].toString()
     let new_rpc = tezallet.RPC_URL[custom]
     let new_rpc_url = ""
+    let new_toolkit = null
+
+    // matching type of rpc
     if(new_rpc){
-        const tk = tezallet.init_tezos_toolkit(new_rpc)
-        new_rpc_url = tk.rpc.getRpcUrl()
+        new_toolkit = tezallet.init_tezos_toolkit(new_rpc)
+        new_rpc_url = new_toolkit.rpc.getRpcUrl()
     } else {
-        const tk = tezallet.init_tezos_toolkit(null, custom)
-        new_rpc_url = tk.rpc.getRpcUrl()
+        new_toolkit = tezallet.init_tezos_toolkit(null, custom)
+        new_rpc_url = new_toolkit.rpc.getRpcUrl()
     }
+    // save to current instance
+    toolkit = new_toolkit
+
     // feedback
     bot.sendMessage(msg.chat.id, `changed RPC into ${new_rpc_url}`)
     .then(sent => msg_stack.push(sent))
