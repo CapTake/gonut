@@ -4,9 +4,9 @@ A Telegram bot that manage crypto wallets and scheule tasks, just reach [@gonut_
 
 ### STATE 
 
-- Security : is a joke, since I have removed lock/unlock wallet mechanism to let users test with comfort. 
+- Security : was improved with lock/unlock function, /pass <password> to start encrypt your mnemonic. 
 - TestNet : The bot it running on Testnet so no worry and just have fun spamming it.
-- WARNING : DON'T TRANSFER YOUR MAINNET XTZ TO BOT WALLET
+- WARNING : DON'T TRANSFER YOUR MAINNET XTZ TO BOT WALLET YET, wait for more tests.
 
 ### SETUP
 If you are curious or just want to verify if I may steal your XTZ :D
